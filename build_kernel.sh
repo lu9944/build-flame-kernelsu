@@ -82,27 +82,89 @@ echo "[*] Collecting build outputs..."
 OUTPUT_DIR="${GITHUB_WORKSPACE:-.}/output"
 mkdir -p "${OUTPUT_DIR}"
 
+# build/build.sh puts output in out/dist/, kernel objects in out/arch/arm64/boot/
 DIST_DIR="${KERNEL_ROOT}/out/dist"
-OUT_DIR="${KERNEL_ROOT}/out"
+BOOT_DIR="${KERNEL_ROOT}/out/arch/arm64/boot"
 
+echo "[*] Searching for kernel images..."
+find "${KERNEL_ROOT}/out" -name "Image.lz4*" -o -name "*.dtb" -o -name "dtbo.img" 2>/dev/null | head -20
+
+KERNEL_IMAGE=""
 for f in \
     "${DIST_DIR}/Image.lz4" \
-    "${DIST_DIR}/dtbo.img" \
-    "${OUT_DIR}/arch/arm64/boot/Image.lz4" \
-    "${OUT_DIR}/arch/arm64/boot/dtbo.img" \
+    "${BOOT_DIR}/Image.lz4" \
+    "${DIST_DIR}/Image.lz4-dtb" \
+    "${BOOT_DIR}/Image.lz4-dtb" \
     ; do
     if [ -f "$f" ]; then
         cp "$f" "${OUTPUT_DIR}/"
         echo "  -> $(basename $f)"
+        if [ -z "${KERNEL_IMAGE}" ]; then
+            KERNEL_IMAGE="$f"
+        fi
     fi
 done
 
-for dtb in "${OUT_DIR}/arch/arm64/boot/dts/google/qcom-base/"sm8150*.dtb; do
+for dtb in "${BOOT_DIR}/dts/google/qcom-base/"sm8150*.dtb "${DIST_DIR}/"sm8150*.dtb; do
     if [ -f "$dtb" ]; then
         cp "$dtb" "${OUTPUT_DIR}/"
         echo "  -> $(basename $dtb)"
     fi
 done
+
+if [ -f "${DIST_DIR}/dtbo.img" ]; then
+    cp "${DIST_DIR}/dtbo.img" "${OUTPUT_DIR}/"
+    echo "  -> dtbo.img"
+fi
+
+echo "[*] Creating boot.img..."
+
+# Get mkbootimg
+mkdir -p /tmp/mkbootimg
+curl -sL "https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/master/mkbootimg.py?format=TEXT" | base64 -d > /tmp/mkbootimg/mkbootimg.py
+curl -sL "https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/master/gki/generate_gki_certificate.py?format=TEXT" | base64 -d > /tmp/mkbootimg/generate_gki_certificate.py 2>/dev/null || true
+chmod +x /tmp/mkbootimg/mkbootimg.py
+
+# Create minimal ramdisk
+MINITRD="/tmp/mkbootimg/ramdisk.cpio.gz"
+echo "minimal ramdisk" | cpio -o -H newc 2>/dev/null | gzip > "${MINITRD}"
+
+# Find DTB for flame
+DTB_FILE=""
+for dtb in \
+    "${OUTPUT_DIR}/sm8150-v2.dtb" \
+    "${OUTPUT_DIR}/sm8150.dtb" \
+    "${BOOT_DIR}/dts/google/qcom-base/sm8150-v2.dtb" \
+    "${BOOT_DIR}/dts/google/qcom-base/sm8150.dtb" \
+    ; do
+    if [ -f "$dtb" ]; then
+        DTB_FILE="$dtb"
+        break
+    fi
+done
+
+MKBOOTIMG_ARGS="--kernel ${KERNEL_IMAGE} --ramdisk ${MINITRD}"
+MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --cmdline 'console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 firmware_class.path=/vendor/firmware_mnt/image cgroup.memory=nokmem lpm_levels.sleep_disabled=1 loop.max_part=7 androidboot.boot_devices=soc/1d84000.ufshc buildvariant=userdebug'"
+MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --base 0x00000000 --kernel_offset 0x00008000 --ramdisk_offset 0x01000000 --tags_offset 0x00000100"
+MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --os_version 10.0.0 --os_patch_level 2020-03-05 --header_version 2"
+
+if [ -n "${DTB_FILE}" ]; then
+    MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --dtb ${DTB_FILE}"
+    echo "  Using DTB: $(basename $DTB_FILE)"
+fi
+
+python3 /tmp/mkbootimg/mkbootimg.py ${MKBOOTIMG_ARGS} --output "${OUTPUT_DIR}/boot.img" 2>&1 || {
+    echo "[!] mkbootimg failed, trying without --dtb..."
+    MKBOOTIMG_ARGS="--kernel ${KERNEL_IMAGE} --ramdisk ${MINITRD}"
+    MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --cmdline 'console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 firmware_class.path=/vendor/firmware_mnt/image cgroup.memory=nokmem lpm_levels.sleep_disabled=1 loop.max_part=7 androidboot.boot_devices=soc/1d84000.ufshc buildvariant=userdebug'"
+    MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --base 0x00000000 --kernel_offset 0x00008000 --ramdisk_offset 0x01000000 --tags_offset 0x00000100"
+    MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --os_version 10.0.0 --os_patch_level 2020-03-05 --header_version 2"
+    python3 /tmp/mkbootimg/mkbootimg.py ${MKBOOTIMG_ARGS} --output "${OUTPUT_DIR}/boot.img"
+}
+
+if [ -f "${OUTPUT_DIR}/boot.img" ]; then
+    echo "  -> boot.img created"
+fi
 
 ls -la "${OUTPUT_DIR}/"
 echo "[*] Done!"
