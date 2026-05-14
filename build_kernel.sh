@@ -34,10 +34,20 @@ mkdir kernel_build
 cd kernel_build
 git config --global user.name "build"
 git config --global user.email "build@local"
-repo init -u ${MANIFEST_URL} -b ${MANIFEST_BRANCH} --depth=1 2>&1 | tail -3
+repo init -u ${MANIFEST_URL} -b ${MANIFEST_BRANCH} -g all --depth=1 2>&1 | tail -3
 
 echo "[*] Syncing kernel source (this may take a while)..."
 repo sync -j${JOBS} -c --no-tags --no-clone-bundle 2>&1 | tail -5
+
+echo "[*] Verifying toolchains..."
+CLANG_DIR="prebuilts-master/clang/host/linux-x86/clang-r353983c/bin"
+GCC_DIR="prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
+GCC32_DIR="prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin"
+
+echo "  Clang: $(ls ${CLANG_DIR}/clang 2>/dev/null || echo 'MISSING')"
+echo "  ld.lld: $(ls ${CLANG_DIR}/ld.lld 2>/dev/null || echo 'MISSING')"
+echo "  GCC ld: $(ls ${GCC_DIR}/aarch64-linux-android-ld 2>/dev/null || echo 'MISSING')"
+echo "  GCC ld.gold: $(ls ${GCC_DIR}/aarch64-linux-android-ld.gold 2>/dev/null || echo 'MISSING')"
 
 echo "[*] Setting up KernelSU ${KERNELSU_VERSION}..."
 cd ${KERNEL_DIR}
@@ -47,16 +57,44 @@ cd ../..
 echo "[*] Applying KernelSU kernel patches..."
 python3 "${GITHUB_WORKSPACE:-.}/patch_kernel.py" "${KERNEL_DIR}"
 
-echo "[*] Patching build.config for -fcommon..."
-# Fix for GCC 10+ -fno-common default (yylloc multiple definition)
-sed -i 's/make O=/make HOSTCFLAGS="-fcommon" O=/' build/build.sh
-
 echo "[*] Building kernel..."
+cd ${KERNEL_DIR}
+
 export ARCH=arm64
-export JOBS
-# Use the standard build script from kernel/build
-# It reads build.config (-> build.config.no-cfi) which sets up toolchains
-BUILD_CONFIG=private/msm-google/build.config.no-cfi build/build.sh 2>&1 | tail -30
+export SUBARCH=arm64
+
+TOOLCHAIN_PATH="${PWD}/../${GCC_DIR}"
+TOOLCHAIN32_PATH="${PWD}/../${GCC32_DIR}"
+CLANG_PATH="${PWD}/../${CLANG_DIR}"
+
+export PATH="${CLANG_PATH}:${TOOLCHAIN_PATH}:${TOOLCHAIN32_PATH}:${PATH}"
+export LD_LIBRARY_PATH="${PWD}/../prebuilts-master/clang/host/linux-x86/clang-r353983c/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+echo "[*] Toolchain PATH:"
+echo "  clang: $(which clang 2>/dev/null || echo 'NOT FOUND')"
+echo "  ld.lld: $(which ld.lld 2>/dev/null || echo 'NOT FOUND')"
+echo "  aarch64-linux-android-gcc: $(which aarch64-linux-android-gcc 2>/dev/null || echo 'NOT FOUND')"
+
+echo "[*] Making defconfig..."
+make O=out ARCH=arm64 \
+    HOSTCFLAGS="-fcommon" \
+    CC=clang \
+    LD=ld.lld \
+    CLANG_TRIPLE=aarch64-linux-gnu- \
+    CROSS_COMPILE=aarch64-linux-android- \
+    CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+    floral_defconfig
+
+echo "[*] Building kernel (this may take a while)..."
+make -j${JOBS} O=out \
+    ARCH=arm64 \
+    HOSTCFLAGS="-fcommon" \
+    CC=clang \
+    LD=ld.lld \
+    CLANG_TRIPLE=aarch64-linux-gnu- \
+    CROSS_COMPILE=aarch64-linux-android- \
+    CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+    2>&1 | tail -20
 
 echo "[*] Build complete!"
 
@@ -64,25 +102,20 @@ echo "[*] Collecting build outputs..."
 OUTPUT_DIR="${GITHUB_WORKSPACE:-.}/output"
 mkdir -p "${OUTPUT_DIR}"
 
-OUT_DIR=$(pwd)/out
-
-if [ -f "${OUT_DIR}/dist/Image.lz4" ]; then
-    cp "${OUT_DIR}/dist/Image.lz4" "${OUTPUT_DIR}/"
-    echo "  -> Image.lz4"
-elif [ -f "${KERNEL_DIR}/out/arch/arm64/boot/Image.lz4" ]; then
-    cp "${KERNEL_DIR}/out/arch/arm64/boot/Image.lz4" "${OUTPUT_DIR}/"
+if [ -f out/arch/arm64/boot/Image.lz4 ]; then
+    cp out/arch/arm64/boot/Image.lz4 "${OUTPUT_DIR}/"
     echo "  -> Image.lz4"
 fi
 
-if [ -f "${OUT_DIR}/dist/dtbo.img" ]; then
-    cp "${OUT_DIR}/dist/dtbo.img" "${OUTPUT_DIR}/"
+if [ -f out/arch/arm64/boot/dtbo.img ]; then
+    cp out/arch/arm64/boot/dtbo.img "${OUTPUT_DIR}/"
     echo "  -> dtbo.img"
 fi
 
-for f in "${OUT_DIR}/dist/"sm8150*.dtb "${KERNEL_DIR}/out/arch/arm64/boot/dts/google/qcom-base/"sm8150*.dtb; do
-    if [ -f "$f" ]; then
-        cp "$f" "${OUTPUT_DIR}/"
-        echo "  -> $(basename $f)"
+for dtb in out/arch/arm64/boot/dts/google/qcom-base/sm8150*.dtb; do
+    if [ -f "$dtb" ]; then
+        cp "$dtb" "${OUTPUT_DIR}/"
+        echo "  -> $(basename $dtb)"
     fi
 done
 
