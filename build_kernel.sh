@@ -39,36 +39,41 @@ repo init -u ${MANIFEST_URL} -b ${MANIFEST_BRANCH} -g all --depth=1 2>&1 | tail 
 echo "[*] Syncing kernel source (this may take a while)..."
 repo sync -j${JOBS} -c --no-tags --no-clone-bundle 2>&1 | tail -5
 
-echo "[*] Verifying toolchains..."
-CLANG_DIR="prebuilts-master/clang/host/linux-x86/clang-r353983c/bin"
-GCC_DIR="prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
-GCC32_DIR="prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin"
+# Save the absolute root path of kernel_build
+KERNEL_ROOT=$(pwd)
+echo "[*] Kernel root: ${KERNEL_ROOT}"
 
-echo "  Clang: $(ls ${CLANG_DIR}/clang 2>/dev/null || echo 'MISSING')"
-echo "  ld.lld: $(ls ${CLANG_DIR}/ld.lld 2>/dev/null || echo 'MISSING')"
-echo "  GCC ld: $(ls ${GCC_DIR}/aarch64-linux-android-ld 2>/dev/null || echo 'MISSING')"
-echo "  GCC ld.gold: $(ls ${GCC_DIR}/aarch64-linux-android-ld.gold 2>/dev/null || echo 'MISSING')"
+CLANG_BIN="${KERNEL_ROOT}/prebuilts-master/clang/host/linux-x86/clang-r353983c/bin"
+GCC_BIN="${KERNEL_ROOT}/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
+GCC32_BIN="${KERNEL_ROOT}/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin"
+CLANG_LIB="${KERNEL_ROOT}/prebuilts-master/clang/host/linux-x86/clang-r353983c/lib64"
+
+echo "[*] Verifying toolchains..."
+echo "  Clang: $(ls ${CLANG_BIN}/clang 2>/dev/null || echo 'MISSING')"
+echo "  ld.lld: $(ls ${CLANG_BIN}/ld.lld 2>/dev/null || echo 'MISSING')"
+echo "  GCC ld: $(ls ${GCC_BIN}/aarch64-linux-android-ld 2>/dev/null || echo 'MISSING')"
 
 echo "[*] Setting up KernelSU ${KERNELSU_VERSION}..."
 cd ${KERNEL_DIR}
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s ${KERNELSU_VERSION}
-cd ../..
+cd "${KERNEL_ROOT}"
 
 echo "[*] Applying KernelSU kernel patches..."
 python3 "${GITHUB_WORKSPACE:-.}/patch_kernel.py" "${KERNEL_DIR}"
 
 echo "[*] Building kernel..."
-cd ${KERNEL_DIR}
+cd "${KERNEL_ROOT}/${KERNEL_DIR}"
 
 export ARCH=arm64
 export SUBARCH=arm64
 
-TOOLCHAIN_PATH="${PWD}/../${GCC_DIR}"
-TOOLCHAIN32_PATH="${PWD}/../${GCC32_DIR}"
-CLANG_PATH="${PWD}/../${CLANG_DIR}"
+export PATH="${CLANG_BIN}:${GCC_BIN}:${GCC32_BIN}:${PATH}"
+export LD_LIBRARY_PATH="${CLANG_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-export PATH="${CLANG_PATH}:${TOOLCHAIN_PATH}:${TOOLCHAIN32_PATH}:${PATH}"
-export LD_LIBRARY_PATH="${PWD}/../prebuilts-master/clang/host/linux-x86/clang-r353983c/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+echo "[*] Debug: PWD=${PWD}"
+echo "[*] Debug: CLANG_BIN=${CLANG_BIN}"
+ls -la "${CLANG_BIN}/clang" 2>/dev/null || echo "CLANG NOT FOUND at ${CLANG_BIN}"
+ls -la "${CLANG_BIN}/ld.lld" 2>/dev/null || echo "ld.lld NOT FOUND at ${CLANG_BIN}"
 
 echo "[*] Toolchain PATH:"
 echo "  clang: $(which clang 2>/dev/null || echo 'NOT FOUND')"
