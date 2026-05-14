@@ -2,7 +2,7 @@
 set -eo pipefail
 
 MANIFEST_URL="https://android.googlesource.com/kernel/manifest"
-MANIFEST_BRANCH="android-msm-coral-4.14-android10-c2f2"
+MANIFEST_BRANCH="android-msm-coral-4.14-android10-qpr1"
 KERNELSU_VERSION="v0.9.5"
 KERNEL_DIR="private/msm-google"
 JOBS=$(nproc)
