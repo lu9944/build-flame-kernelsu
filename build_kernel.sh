@@ -1,6 +1,7 @@
 #!/bin/bash
 set -eo pipefail
 
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 MANIFEST_URL="https://android.googlesource.com/kernel/manifest"
 MANIFEST_BRANCH="android-msm-coral-4.14-android10-qpr1"
 KERNELSU_VERSION="v0.9.5"
@@ -128,9 +129,8 @@ echo "[*] Kernel image: ${KERNEL_IMAGE}"
 
 echo "[*] Creating boot.img from stock ramdisk..."
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-STOCK_RAMDISK="${SCRIPT_DIR}/stock_ramdisk.gz"
-STOCK_DTB_GZ="${SCRIPT_DIR}/stock_dtb.bin.gz"
+STOCK_RAMDISK="${REPO_ROOT}/stock_ramdisk.gz"
+STOCK_DTB_GZ="${REPO_ROOT}/stock_dtb.bin.gz"
 
 if [ ! -f "${STOCK_RAMDISK}" ]; then
     echo "[!] stock_ramdisk.gz not found, cannot create boot.img"
