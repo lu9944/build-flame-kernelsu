@@ -65,7 +65,7 @@ export PATH="${CLANG_PATH}:${TOOLCHAIN_PATH}:${TOOLCHAIN32_PATH}:${PATH}"
 export LD_LIBRARY_PATH="${PWD}/../prebuilts-master/clang/host/linux-x86/clang-r353983c/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 echo "[*] Making defconfig..."
-make O=out ARCH=arm64 floral_defconfig
+make O=out ARCH=arm64 HOSTCFLAGS="-fcommon" floral_defconfig
 
 echo "[*] Building kernel (this may take a while)..."
 make -j${JOBS} O=out \
@@ -74,6 +74,7 @@ make -j${JOBS} O=out \
     CLANG_TRIPLE=aarch64-linux-gnu- \
     CROSS_COMPILE=aarch64-linux-android- \
     CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+    HOSTCFLAGS="-fcommon" \
     2>&1 | tail -20
 
 echo "[*] Build complete!"
