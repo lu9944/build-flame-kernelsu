@@ -64,6 +64,8 @@ python3 "${GITHUB_WORKSPACE:-.}/patch_kernel.py" "${KERNEL_DIR}"
 echo "[*] Fixing build compatibility issues..."
 # Fix selinux classmap.h PF_MAX check for newer host headers
 sed -i 's/#if PF_MAX > 44/#if PF_MAX > 50/' "${KERNEL_DIR}/security/selinux/include/classmap.h"
+# Disable DT overlay build (dtc compatibility issue on newer hosts)
+sed -i 's/CONFIG_BUILD_ARM64_DT_OVERLAY=y/# CONFIG_BUILD_ARM64_DT_OVERLAY is not set/' "${KERNEL_DIR}/arch/arm64/configs/floral_defconfig"
 
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}/${KERNEL_DIR}"
