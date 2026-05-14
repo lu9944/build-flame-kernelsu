@@ -65,12 +65,13 @@ export PATH="${CLANG_PATH}:${TOOLCHAIN_PATH}:${TOOLCHAIN32_PATH}:${PATH}"
 export LD_LIBRARY_PATH="${PWD}/../prebuilts-master/clang/host/linux-x86/clang-r353983c/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 echo "[*] Making defconfig..."
-make O=out ARCH=arm64 HOSTCFLAGS="-fcommon" floral_defconfig
+make O=out ARCH=arm64 HOSTCFLAGS="-fcommon" CC=clang LD=ld.lld CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- floral_defconfig
 
 echo "[*] Building kernel (this may take a while)..."
 make -j${JOBS} O=out \
     ARCH=arm64 \
     CC=clang \
+    LD=ld.lld \
     CLANG_TRIPLE=aarch64-linux-gnu- \
     CROSS_COMPILE=aarch64-linux-android- \
     CROSS_COMPILE_ARM32=arm-linux-androideabi- \
