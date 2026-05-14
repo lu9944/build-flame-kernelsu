@@ -131,9 +131,10 @@ echo "[*] Creating boot.img from stock ramdisk..."
 
 STOCK_RAMDISK="${REPO_ROOT}/stock_ramdisk.gz"
 STOCK_DTB_GZ="${REPO_ROOT}/stock_dtb.bin.gz"
+STOCK_HEADER="${REPO_ROOT}/stock_header.bin"
 
-if [ ! -f "${STOCK_RAMDISK}" ]; then
-    echo "[!] stock_ramdisk.gz not found, cannot create boot.img"
+if [ ! -f "${STOCK_RAMDISK}" ] || [ ! -f "${STOCK_HEADER}" ]; then
+    echo "[!] stock_ramdisk.gz or stock_header.bin not found, cannot create boot.img"
     echo "[!] Uploading kernel images only"
     ls -la "${OUTPUT_DIR}/"
     exit 0
@@ -146,6 +147,7 @@ BOOT_IMG_CREATED=false
 export KERNEL_IMAGE_PATH="${KERNEL_IMAGE}"
 export STOCK_RAMDISK
 export STOCK_DTB
+export STOCK_HEADER
 export OUTPUT_DIR
 
 python3 << 'PYEOF' && BOOT_IMG_CREATED=true
@@ -154,8 +156,11 @@ import struct, sys, os
 kernel_path = os.environ["KERNEL_IMAGE_PATH"]
 ramdisk_path = os.environ["STOCK_RAMDISK"]
 dtb_path = os.environ["STOCK_DTB"]
+header_path = os.environ["STOCK_HEADER"]
 output_path = os.environ["OUTPUT_DIR"] + "/boot.img"
 
+with open(header_path, "rb") as f:
+    header = bytearray(f.read())
 with open(kernel_path, "rb") as f:
     new_kernel = f.read()
 with open(ramdisk_path, "rb") as f:
@@ -163,24 +168,9 @@ with open(ramdisk_path, "rb") as f:
 with open(dtb_path, "rb") as f:
     dtb = f.read()
 
-PS = 4096
-HS = 4096
+PS = struct.unpack_from('<I', header, 36)[0]
 
-header = bytearray(PS)
-header[0:8] = b'ANDROID!'
 struct.pack_into('<I', header, 8, len(new_kernel))
-struct.pack_into('<I', header, 12, 0x00008000)
-struct.pack_into('<I', header, 16, len(ramdisk))
-struct.pack_into('<I', header, 20, 0x01000000)
-struct.pack_into('<I', header, 24, 0)
-struct.pack_into('<I', header, 28, 0x00f00000)
-struct.pack_into('<I', header, 32, 0x00000100)
-struct.pack_into('<I', header, 36, PS)
-struct.pack_into('<I', header, 40, 2)
-struct.pack_into('<I', header, 44, 0x14000144)
-
-cmdline = b'console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 androidboot.memcg=1 cgroup.memory=nokmem usbcore.autosuspend=7 androidboot.usbcontroller=a600000.dwc3 swiotlb=2048 androidboot.boot_devices=soc/1d84000.ufshc buildvariant=user'
-header[64:64+len(cmdline)] = cmdline
 
 out = bytearray(header)
 out.extend(new_kernel)
