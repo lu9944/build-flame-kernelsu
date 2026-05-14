@@ -63,6 +63,8 @@ grep -q "CONFIG_KPROBES=y" "${DEFCONFIG}" || echo "CONFIG_KPROBES=y" >> "${DEFCO
 echo "[*] Fixing build compatibility issues..."
 sed -i 's/#if PF_MAX > 44/#if PF_MAX > 50/' "${KERNEL_DIR}/security/selinux/include/classmap.h"
 sed -i 's/CONFIG_BUILD_ARM64_DT_OVERLAY=y/# CONFIG_BUILD_ARM64_DT_OVERLAY is not set/' "${DEFCONFIG}"
+# Remove check_defconfig to avoid savedefconfig mismatch
+sed -i 's/check_defconfig && //' "${KERNEL_DIR}/build.config.no-cfi"
 
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}"
