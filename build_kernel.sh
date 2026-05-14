@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -eo pipefail
 
 MANIFEST_URL="https://android.googlesource.com/kernel/manifest"
 MANIFEST_BRANCH="android-msm-coral-4.14-android10-c2f2"
@@ -19,7 +19,7 @@ sudo apt-get install -y -qq \
     git python3 bc bison flex libssl-dev libelf-dev \
     build-essential gcc-aarch64-linux-gnu \
     libc6-dev-arm64-cross gcc-arm-linux-gnueabi \
-    lz4 cpio libncurses5-dev wget curl \
+    lz4 cpio libncurses5-dev wget curl pkg-config \
     > /dev/null 2>&1
 
 echo "[*] Installing repo tool..."
@@ -47,36 +47,16 @@ cd ../..
 echo "[*] Applying KernelSU kernel patches..."
 python3 "${GITHUB_WORKSPACE:-.}/patch_kernel.py" "${KERNEL_DIR}"
 
+echo "[*] Patching build.config for -fcommon..."
+# Fix for GCC 10+ -fno-common default (yylloc multiple definition)
+sed -i 's/make O=/make HOSTCFLAGS="-fcommon" O=/' build/build.sh
+
 echo "[*] Building kernel..."
-cd ${KERNEL_DIR}
-# Build using the standard kernel build process
 export ARCH=arm64
-export SUBARCH=arm64
-export CROSS_COMPILE=aarch64-linux-android-
-export CROSS_COMPILE_ARM32=arm-linux-androideabi-
-export CC=clang
-
-# Use prebuilt toolchains from the manifest
-TOOLCHAIN_PATH="${PWD}/../prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
-TOOLCHAIN32_PATH="${PWD}/../prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin"
-CLANG_PATH="${PWD}/../prebuilts-master/clang/host/linux-x86/clang-r353983c/bin"
-
-export PATH="${CLANG_PATH}:${TOOLCHAIN_PATH}:${TOOLCHAIN32_PATH}:${PATH}"
-export LD_LIBRARY_PATH="${PWD}/../prebuilts-master/clang/host/linux-x86/clang-r353983c/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-echo "[*] Making defconfig..."
-make O=out ARCH=arm64 HOSTCFLAGS="-fcommon" CC=clang LD=ld.lld CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- floral_defconfig
-
-echo "[*] Building kernel (this may take a while)..."
-make -j${JOBS} O=out \
-    ARCH=arm64 \
-    CC=clang \
-    LD=ld.lld \
-    CLANG_TRIPLE=aarch64-linux-gnu- \
-    CROSS_COMPILE=aarch64-linux-android- \
-    CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-    HOSTCFLAGS="-fcommon" \
-    2>&1 | tail -20
+export JOBS
+# Use the standard build script from kernel/build
+# It reads build.config (-> build.config.no-cfi) which sets up toolchains
+BUILD_CONFIG=private/msm-google/build.config.no-cfi build/build.sh 2>&1 | tail -30
 
 echo "[*] Build complete!"
 
@@ -84,20 +64,25 @@ echo "[*] Collecting build outputs..."
 OUTPUT_DIR="${GITHUB_WORKSPACE:-.}/output"
 mkdir -p "${OUTPUT_DIR}"
 
-if [ -f out/arch/arm64/boot/Image.lz4 ]; then
-    cp out/arch/arm64/boot/Image.lz4 "${OUTPUT_DIR}/"
+OUT_DIR=$(pwd)/out
+
+if [ -f "${OUT_DIR}/dist/Image.lz4" ]; then
+    cp "${OUT_DIR}/dist/Image.lz4" "${OUTPUT_DIR}/"
+    echo "  -> Image.lz4"
+elif [ -f "${KERNEL_DIR}/out/arch/arm64/boot/Image.lz4" ]; then
+    cp "${KERNEL_DIR}/out/arch/arm64/boot/Image.lz4" "${OUTPUT_DIR}/"
     echo "  -> Image.lz4"
 fi
 
-if [ -f out/arch/arm64/boot/dtbo.img ]; then
-    cp out/arch/arm64/boot/dtbo.img "${OUTPUT_DIR}/"
+if [ -f "${OUT_DIR}/dist/dtbo.img" ]; then
+    cp "${OUT_DIR}/dist/dtbo.img" "${OUTPUT_DIR}/"
     echo "  -> dtbo.img"
 fi
 
-for dtb in out/arch/arm64/boot/dts/google/qcom-base/sm8150*.dtb; do
-    if [ -f "$dtb" ]; then
-        cp "$dtb" "${OUTPUT_DIR}/"
-        echo "  -> $(basename $dtb)"
+for f in "${OUT_DIR}/dist/"sm8150*.dtb "${KERNEL_DIR}/out/arch/arm64/boot/dts/google/qcom-base/"sm8150*.dtb; do
+    if [ -f "$f" ]; then
+        cp "$f" "${OUTPUT_DIR}/"
+        echo "  -> $(basename $f)"
     fi
 done
 
