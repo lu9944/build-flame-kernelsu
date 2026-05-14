@@ -61,8 +61,8 @@ TOOLCHAIN_PATH="${PWD}/../prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-
 TOOLCHAIN32_PATH="${PWD}/../prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin"
 CLANG_PATH="${PWD}/../prebuilts-master/clang/host/linux-x86/clang-r353983c/bin"
 
-export PATH="${CLANG_PATH}:${TOOLCHAIN_PATH}:${TOOLCHAIN32_PATH}:$PATH"
-export LD_LIBRARY_PATH="${PWD}/../prebuilts-master/clang/host/linux-x86/clang-r353983c/lib64:$LD_LIBRARY_PATH"
+export PATH="${CLANG_PATH}:${TOOLCHAIN_PATH}:${TOOLCHAIN32_PATH}:${PATH}"
+export LD_LIBRARY_PATH="${PWD}/../prebuilts-master/clang/host/linux-x86/clang-r353983c/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 echo "[*] Making defconfig..."
 make O=out ARCH=arm64 floral_defconfig
