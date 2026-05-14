@@ -126,80 +126,79 @@ fi
 
 echo "[*] Kernel image: ${KERNEL_IMAGE}"
 
-echo "[*] Creating boot.img..."
-set +e
+echo "[*] Creating boot.img from stock ramdisk..."
 
-mkdir -p /tmp/mkbootimg
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+STOCK_RAMDISK="${SCRIPT_DIR}/stock_ramdisk.gz"
+STOCK_DTB_GZ="${SCRIPT_DIR}/stock_dtb.bin.gz"
 
-# Download mkbootimg.py from Android 10 release
-curl -sL "https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/tags/android-10.0.0_r33/mkbootimg.py?format=TEXT" | base64 -d > /tmp/mkbootimg/mkbootimg.py 2>/dev/null
-if [ ! -s /tmp/mkbootimg/mkbootimg.py ]; then
-    curl -sL "https://raw.githubusercontent.com/nicholasgasior/gohper/master/scripts/mkbootimg.py" > /tmp/mkbootimg/mkbootimg.py 2>/dev/null
+if [ ! -f "${STOCK_RAMDISK}" ]; then
+    echo "[!] stock_ramdisk.gz not found, cannot create boot.img"
+    echo "[!] Uploading kernel images only"
+    ls -la "${OUTPUT_DIR}/"
+    exit 0
 fi
 
-# Create minimal ramdisk
-MINITRD="/tmp/mkbootimg/ramdisk.cpio.gz"
-mkdir -p /tmp/mkbootimg/rd && cd /tmp/mkbootimg/rd
-echo "init" > init
-find . | cpio -o -H newc 2>/dev/null | gzip > "${MINITRD}"
-cd "${KERNEL_ROOT}"
+gunzip -k -c "${STOCK_DTB_GZ}" > /tmp/stock_dtb.bin 2>/dev/null
+STOCK_DTB="/tmp/stock_dtb.bin"
 
 BOOT_IMG_CREATED=false
+export KERNEL_IMAGE_PATH="${KERNEL_IMAGE}"
+export STOCK_RAMDISK
+export STOCK_DTB
+export OUTPUT_DIR
 
-if [ -s /tmp/mkbootimg/mkbootimg.py ]; then
-    echo "[*] Using mkbootimg.py..."
-    python3 /tmp/mkbootimg/mkbootimg.py \
-        --kernel "${KERNEL_IMAGE}" \
-        --ramdisk "${MINITRD}" \
-        --cmdline "console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 firmware_class.path=/vendor/firmware_mnt/image cgroup.memory=nokmem lpm_levels.sleep_disabled=1 loop.max_part=7 androidboot.boot_devices=soc/1d84000.ufshc" \
-        --base 0x00000000 \
-        --kernel_offset 0x00008000 \
-        --ramdisk_offset 0x01000000 \
-        --tags_offset 0x00000100 \
-        --os_version 10.0.0 \
-        --os_patch_level 2020-03-05 \
-        --header_version 2 \
-        --output "${OUTPUT_DIR}/boot.img" 2>&1 && BOOT_IMG_CREATED=true
-fi
+python3 << 'PYEOF' && BOOT_IMG_CREATED=true
+import struct, sys, os
 
-if [ "${BOOT_IMG_CREATED}" = "false" ]; then
-    echo "[*] mkbootimg.py failed or unavailable, creating boot.img manually..."
-    # Manual boot.img: header(1648 bytes) + page-aligned kernel + page-aligned ramdisk
-    KERNEL_SIZE=$(stat -c%s "${KERNEL_IMAGE}")
-    RAMDISK_SIZE=$(stat -c%s "${MINITRD}")
-    PAGE_SIZE=4096
-    KERNEL_PAGES=$(( (KERNEL_SIZE + PAGE_SIZE - 1) / PAGE_SIZE ))
-    RAMDISK_PAGES=$(( (RAMDISK_SIZE + PAGE_SIZE - 1) / PAGE_SIZE ))
-    BOOT_SIZE=$(( 1648 + KERNEL_PAGES * PAGE_SIZE + RAMDISK_PAGES * PAGE_SIZE ))
+kernel_path = os.environ["KERNEL_IMAGE_PATH"]
+ramdisk_path = os.environ["STOCK_RAMDISK"]
+dtb_path = os.environ["STOCK_DTB"]
+output_path = os.environ["OUTPUT_DIR"] + "/boot.img"
 
-    # Write boot header (Android boot image header v0)
-    python3 -c "
-import struct, sys
-kern = open('${KERNEL_IMAGE}', 'rb').read()
-rd = open('${MINITRD}', 'rb').read()
-cmdline = b'console=ttyMSM0,115200n8 androidboot.console=ttyMSM0'
+with open(kernel_path, "rb") as f:
+    new_kernel = f.read()
+with open(ramdisk_path, "rb") as f:
+    ramdisk = f.read()
+with open(dtb_path, "rb") as f:
+    dtb = f.read()
+
 PS = 4096
-header = bytearray(1648)
-# magic ANDROID!
-header[0:8] = b'ANDROID!'
-struct.pack_into('<I', header, 8, kern.__len__())     # kernel_size
-struct.pack_into('<I', header, 12, 0x00008000)         # kernel_addr
-struct.pack_into('<I', header, 16, rd.__len__())        # ramdisk_size
-struct.pack_into('<I', header, 20, 0x01000000)         # ramdisk_addr
-struct.pack_into('<I', header, 24, 0x00000100)         # tags_addr
-struct.pack_into('<I', header, 28, 0)                   # page_size
-header[32:36] = b'\\x00\\x00\\x00\\x00'                # header_version = 0
-header[36:64] = cmdline + b'\\x00' * (28 - cmdline.__len__())  # cmdline
-header[64:1024] = b'\\x00' * 960                        # id + extra_cmdline
-# pad kernel and ramdisk to page size
-kern_pad = b'\\x00' * ((PS - kern.__len__() % PS) % PS)
-rd_pad = b'\\x00' * ((PS - rd.__len__() % PS) % PS)
-open('${OUTPUT_DIR}/boot.img', 'wb').write(header + kern + kern_pad + rd + rd_pad)
-print(f'boot.img created: {header.__len__() + kern.__len__() + kern_pad.__len__() + rd.__len__() + rd_pad.__len__()} bytes')
-" && BOOT_IMG_CREATED=true
-fi
+HS = 4096
 
-set -e
+header = bytearray(PS)
+header[0:8] = b'ANDROID!'
+struct.pack_into('<I', header, 8, len(new_kernel))
+struct.pack_into('<I', header, 12, 0x00008000)
+struct.pack_into('<I', header, 16, len(ramdisk))
+struct.pack_into('<I', header, 20, 0x01000000)
+struct.pack_into('<I', header, 24, 0)
+struct.pack_into('<I', header, 28, 0x00f00000)
+struct.pack_into('<I', header, 32, 0x00000100)
+struct.pack_into('<I', header, 36, PS)
+struct.pack_into('<I', header, 40, 2)
+struct.pack_into('<I', header, 44, 0x14000144)
+
+cmdline = b'console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 androidboot.memcg=1 cgroup.memory=nokmem usbcore.autosuspend=7 androidboot.usbcontroller=a600000.dwc3 swiotlb=2048 androidboot.boot_devices=soc/1d84000.ufshc buildvariant=user'
+header[64:64+len(cmdline)] = cmdline
+
+out = bytearray(header)
+out.extend(new_kernel)
+out.extend(b'\x00' * ((PS - (len(new_kernel) % PS)) % PS))
+out.extend(ramdisk)
+out.extend(b'\x00' * ((PS - (len(ramdisk) % PS)) % PS))
+out.extend(dtb)
+out.extend(b'\x00' * ((PS - (len(dtb) % PS)) % PS))
+
+with open(output_path, "wb") as f:
+    f.write(out)
+print(f'boot.img: {len(out)} bytes ({len(out)/1024/1024:.1f} MB)')
+print(f'  kernel: {len(new_kernel)} bytes')
+print(f'  ramdisk: {len(ramdisk)} bytes')
+print(f'  dtb: {len(dtb)} bytes')
+PYEOF
+
+rm -f /tmp/stock_dtb.bin
 
 if [ "${BOOT_IMG_CREATED}" = "true" ] && [ -f "${OUTPUT_DIR}/boot.img" ]; then
     echo "  -> boot.img ($(du -sh ${OUTPUT_DIR}/boot.img | cut -f1))"
