@@ -124,52 +124,84 @@ if [ -z "${KERNEL_IMAGE}" ]; then
     exit 1
 fi
 
+echo "[*] Kernel image: ${KERNEL_IMAGE}"
+
 echo "[*] Creating boot.img..."
+set +e
+
 mkdir -p /tmp/mkbootimg
 
-# Get mkbootimg - use a pinned version that works without extra deps
-curl -sL "https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/tags/android-10.0.0_r33/mkbootimg?format=TEXT" | base64 -d > /tmp/mkbootimg/mkbootimg
-chmod +x /tmp/mkbootimg/mkbootimg
+# Download mkbootimg.py from Android 10 release
+curl -sL "https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/tags/android-10.0.0_r33/mkbootimg.py?format=TEXT" | base64 -d > /tmp/mkbootimg/mkbootimg.py 2>/dev/null
+if [ ! -s /tmp/mkbootimg/mkbootimg.py ]; then
+    curl -sL "https://raw.githubusercontent.com/nicholasgasior/gohper/master/scripts/mkbootimg.py" > /tmp/mkbootimg/mkbootimg.py 2>/dev/null
+fi
 
 # Create minimal ramdisk
 MINITRD="/tmp/mkbootimg/ramdisk.cpio.gz"
-cd /tmp/mkbootimg
-mkdir -p ramdisk_dir
-cd ramdisk_dir
-echo "minimal" > README
+mkdir -p /tmp/mkbootimg/rd && cd /tmp/mkbootimg/rd
+echo "init" > init
 find . | cpio -o -H newc 2>/dev/null | gzip > "${MINITRD}"
 cd "${KERNEL_ROOT}"
 
-# Find DTB
-DTB_FILE=""
-for dtb in $(find "${ACTUAL_OUT}" -name "sm8150-v2.dtb" -o -name "sm8150.dtb" 2>/dev/null | head -1); do
-    DTB_FILE="$dtb"
-done
+BOOT_IMG_CREATED=false
 
-# mkbootimg for Pixel 4 (header version 2)
-MKBOOTIMG_CMD="/tmp/mkbootimg/mkbootimg --kernel ${KERNEL_IMAGE} --ramdisk ${MINITRD}"
-MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --cmdline \"console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 firmware_class.path=/vendor/firmware_mnt/image cgroup.memory=nokmem lpm_levels.sleep_disabled=1 loop.max_part=7 androidboot.boot_devices=soc/1d84000.ufshc\""
-MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --base 0x00000000 --kernel_offset 0x00008000 --ramdisk_offset 0x01000000 --tags_offset 0x00000100"
-MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --os_version 10.0.0 --os_patch_level 2020-03-05 --header_version 2"
-if [ -n "${DTB_FILE}" ]; then
-    MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --dtb ${DTB_FILE}"
-fi
-MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --output ${OUTPUT_DIR}/boot.img"
-
-echo "[*] Running: ${MKBOOTIMG_CMD}"
-eval ${MKBOOTIMG_CMD} 2>&1 || {
-    echo "[!] mkbootimg v2 failed, trying header v0..."
-    /tmp/mkbootimg/mkbootimg \
+if [ -s /tmp/mkbootimg/mkbootimg.py ]; then
+    echo "[*] Using mkbootimg.py..."
+    python3 /tmp/mkbootimg/mkbootimg.py \
         --kernel "${KERNEL_IMAGE}" \
         --ramdisk "${MINITRD}" \
+        --cmdline "console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 firmware_class.path=/vendor/firmware_mnt/image cgroup.memory=nokmem lpm_levels.sleep_disabled=1 loop.max_part=7 androidboot.boot_devices=soc/1d84000.ufshc" \
         --base 0x00000000 \
         --kernel_offset 0x00008000 \
         --ramdisk_offset 0x01000000 \
         --tags_offset 0x00000100 \
-        --output "${OUTPUT_DIR}/boot.img" 2>&1
-}
+        --os_version 10.0.0 \
+        --os_patch_level 2020-03-05 \
+        --header_version 2 \
+        --output "${OUTPUT_DIR}/boot.img" 2>&1 && BOOT_IMG_CREATED=true
+fi
 
-if [ -f "${OUTPUT_DIR}/boot.img" ]; then
+if [ "${BOOT_IMG_CREATED}" = "false" ]; then
+    echo "[*] mkbootimg.py failed or unavailable, creating boot.img manually..."
+    # Manual boot.img: header(1648 bytes) + page-aligned kernel + page-aligned ramdisk
+    KERNEL_SIZE=$(stat -c%s "${KERNEL_IMAGE}")
+    RAMDISK_SIZE=$(stat -c%s "${MINITRD}")
+    PAGE_SIZE=4096
+    KERNEL_PAGES=$(( (KERNEL_SIZE + PAGE_SIZE - 1) / PAGE_SIZE ))
+    RAMDISK_PAGES=$(( (RAMDISK_SIZE + PAGE_SIZE - 1) / PAGE_SIZE ))
+    BOOT_SIZE=$(( 1648 + KERNEL_PAGES * PAGE_SIZE + RAMDISK_PAGES * PAGE_SIZE ))
+
+    # Write boot header (Android boot image header v0)
+    python3 -c "
+import struct, sys
+kern = open('${KERNEL_IMAGE}', 'rb').read()
+rd = open('${MINITRD}', 'rb').read()
+cmdline = b'console=ttyMSM0,115200n8 androidboot.console=ttyMSM0'
+PS = 4096
+header = bytearray(1648)
+# magic ANDROID!
+header[0:8] = b'ANDROID!'
+struct.pack_into('<I', header, 8, kern.__len__())     # kernel_size
+struct.pack_into('<I', header, 12, 0x00008000)         # kernel_addr
+struct.pack_into('<I', header, 16, rd.__len__())        # ramdisk_size
+struct.pack_into('<I', header, 20, 0x01000000)         # ramdisk_addr
+struct.pack_into('<I', header, 24, 0x00000100)         # tags_addr
+struct.pack_into('<I', header, 28, 0)                   # page_size
+header[32:36] = b'\\x00\\x00\\x00\\x00'                # header_version = 0
+header[36:64] = cmdline + b'\\x00' * (28 - cmdline.__len__())  # cmdline
+header[64:1024] = b'\\x00' * 960                        # id + extra_cmdline
+# pad kernel and ramdisk to page size
+kern_pad = b'\\x00' * ((PS - kern.__len__() % PS) % PS)
+rd_pad = b'\\x00' * ((PS - rd.__len__() % PS) % PS)
+open('${OUTPUT_DIR}/boot.img', 'wb').write(header + kern + kern_pad + rd + rd_pad)
+print(f'boot.img created: {header.__len__() + kern.__len__() + kern_pad.__len__() + rd.__len__() + rd_pad.__len__()} bytes')
+" && BOOT_IMG_CREATED=true
+fi
+
+set -e
+
+if [ "${BOOT_IMG_CREATED}" = "true" ] && [ -f "${OUTPUT_DIR}/boot.img" ]; then
     echo "  -> boot.img ($(du -sh ${OUTPUT_DIR}/boot.img | cut -f1))"
 else
     echo "[!] boot.img creation failed, uploading kernel images only"
