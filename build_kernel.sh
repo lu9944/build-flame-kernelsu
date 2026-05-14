@@ -82,18 +82,22 @@ echo "[*] Collecting build outputs..."
 OUTPUT_DIR="${GITHUB_WORKSPACE:-.}/output"
 mkdir -p "${OUTPUT_DIR}"
 
-# build/build.sh puts output in out/dist/, kernel objects in out/arch/arm64/boot/
-DIST_DIR="${KERNEL_ROOT}/out/dist"
-BOOT_DIR="${KERNEL_ROOT}/out/arch/arm64/boot"
+# build/build.sh uses OUT_DIR like out/android-msm-floral-4.14/
+ACTUAL_OUT=$(find "${KERNEL_ROOT}/out" -maxdepth 2 -name "dist" -type d 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+if [ -z "${ACTUAL_OUT}" ]; then
+    ACTUAL_OUT="${KERNEL_ROOT}/out"
+fi
+DIST_DIR="${ACTUAL_OUT}/dist"
+BOOT_DIR="${ACTUAL_OUT}/private/msm-google/arch/arm64/boot"
 
+echo "[*] OUT_DIR: ${ACTUAL_OUT}"
 echo "[*] Searching for kernel images..."
-find "${KERNEL_ROOT}/out" -name "Image.lz4*" -o -name "*.dtb" -o -name "dtbo.img" 2>/dev/null | head -20
+find "${KERNEL_ROOT}/out" -name "Image.lz4*" -o -name "*.dtb" 2>/dev/null | head -20
 
 KERNEL_IMAGE=""
 for f in \
     "${DIST_DIR}/Image.lz4" \
     "${BOOT_DIR}/Image.lz4" \
-    "${DIST_DIR}/Image.lz4-dtb" \
     "${BOOT_DIR}/Image.lz4-dtb" \
     ; do
     if [ -f "$f" ]; then
@@ -105,11 +109,9 @@ for f in \
     fi
 done
 
-for dtb in "${BOOT_DIR}/dts/google/qcom-base/"sm8150*.dtb "${DIST_DIR}/"sm8150*.dtb; do
-    if [ -f "$dtb" ]; then
-        cp "$dtb" "${OUTPUT_DIR}/"
-        echo "  -> $(basename $dtb)"
-    fi
+for dtb in $(find "${ACTUAL_OUT}" -name "sm8150*.dtb" 2>/dev/null); do
+    cp "$dtb" "${OUTPUT_DIR}/"
+    echo "  -> $(basename $dtb)"
 done
 
 if [ -f "${DIST_DIR}/dtbo.img" ]; then
@@ -117,53 +119,60 @@ if [ -f "${DIST_DIR}/dtbo.img" ]; then
     echo "  -> dtbo.img"
 fi
 
-echo "[*] Creating boot.img..."
+if [ -z "${KERNEL_IMAGE}" ]; then
+    echo "[!] No kernel image found!"
+    exit 1
+fi
 
-# Get mkbootimg
+echo "[*] Creating boot.img..."
 mkdir -p /tmp/mkbootimg
-curl -sL "https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/master/mkbootimg.py?format=TEXT" | base64 -d > /tmp/mkbootimg/mkbootimg.py
-curl -sL "https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/master/gki/generate_gki_certificate.py?format=TEXT" | base64 -d > /tmp/mkbootimg/generate_gki_certificate.py 2>/dev/null || true
-chmod +x /tmp/mkbootimg/mkbootimg.py
+
+# Get mkbootimg - use a pinned version that works without extra deps
+curl -sL "https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/tags/android-10.0.0_r33/mkbootimg?format=TEXT" | base64 -d > /tmp/mkbootimg/mkbootimg
+chmod +x /tmp/mkbootimg/mkbootimg
 
 # Create minimal ramdisk
 MINITRD="/tmp/mkbootimg/ramdisk.cpio.gz"
-echo "minimal ramdisk" | cpio -o -H newc 2>/dev/null | gzip > "${MINITRD}"
+cd /tmp/mkbootimg
+mkdir -p ramdisk_dir
+cd ramdisk_dir
+echo "minimal" > README
+find . | cpio -o -H newc 2>/dev/null | gzip > "${MINITRD}"
+cd "${KERNEL_ROOT}"
 
-# Find DTB for flame
+# Find DTB
 DTB_FILE=""
-for dtb in \
-    "${OUTPUT_DIR}/sm8150-v2.dtb" \
-    "${OUTPUT_DIR}/sm8150.dtb" \
-    "${BOOT_DIR}/dts/google/qcom-base/sm8150-v2.dtb" \
-    "${BOOT_DIR}/dts/google/qcom-base/sm8150.dtb" \
-    ; do
-    if [ -f "$dtb" ]; then
-        DTB_FILE="$dtb"
-        break
-    fi
+for dtb in $(find "${ACTUAL_OUT}" -name "sm8150-v2.dtb" -o -name "sm8150.dtb" 2>/dev/null | head -1); do
+    DTB_FILE="$dtb"
 done
 
-MKBOOTIMG_ARGS="--kernel ${KERNEL_IMAGE} --ramdisk ${MINITRD}"
-MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --cmdline 'console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 firmware_class.path=/vendor/firmware_mnt/image cgroup.memory=nokmem lpm_levels.sleep_disabled=1 loop.max_part=7 androidboot.boot_devices=soc/1d84000.ufshc buildvariant=userdebug'"
-MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --base 0x00000000 --kernel_offset 0x00008000 --ramdisk_offset 0x01000000 --tags_offset 0x00000100"
-MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --os_version 10.0.0 --os_patch_level 2020-03-05 --header_version 2"
-
+# mkbootimg for Pixel 4 (header version 2)
+MKBOOTIMG_CMD="/tmp/mkbootimg/mkbootimg --kernel ${KERNEL_IMAGE} --ramdisk ${MINITRD}"
+MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --cmdline \"console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 firmware_class.path=/vendor/firmware_mnt/image cgroup.memory=nokmem lpm_levels.sleep_disabled=1 loop.max_part=7 androidboot.boot_devices=soc/1d84000.ufshc\""
+MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --base 0x00000000 --kernel_offset 0x00008000 --ramdisk_offset 0x01000000 --tags_offset 0x00000100"
+MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --os_version 10.0.0 --os_patch_level 2020-03-05 --header_version 2"
 if [ -n "${DTB_FILE}" ]; then
-    MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --dtb ${DTB_FILE}"
-    echo "  Using DTB: $(basename $DTB_FILE)"
+    MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --dtb ${DTB_FILE}"
 fi
+MKBOOTIMG_CMD="${MKBOOTIMG_CMD} --output ${OUTPUT_DIR}/boot.img"
 
-python3 /tmp/mkbootimg/mkbootimg.py ${MKBOOTIMG_ARGS} --output "${OUTPUT_DIR}/boot.img" 2>&1 || {
-    echo "[!] mkbootimg failed, trying without --dtb..."
-    MKBOOTIMG_ARGS="--kernel ${KERNEL_IMAGE} --ramdisk ${MINITRD}"
-    MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --cmdline 'console=ttyMSM0,115200n8 androidboot.console=ttyMSM0 printk.devkmsg=on msm_rtb.filter=0x237 ehci-hcd.park=3 service_locator.enable=1 firmware_class.path=/vendor/firmware_mnt/image cgroup.memory=nokmem lpm_levels.sleep_disabled=1 loop.max_part=7 androidboot.boot_devices=soc/1d84000.ufshc buildvariant=userdebug'"
-    MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --base 0x00000000 --kernel_offset 0x00008000 --ramdisk_offset 0x01000000 --tags_offset 0x00000100"
-    MKBOOTIMG_ARGS="${MKBOOTIMG_ARGS} --os_version 10.0.0 --os_patch_level 2020-03-05 --header_version 2"
-    python3 /tmp/mkbootimg/mkbootimg.py ${MKBOOTIMG_ARGS} --output "${OUTPUT_DIR}/boot.img"
+echo "[*] Running: ${MKBOOTIMG_CMD}"
+eval ${MKBOOTIMG_CMD} 2>&1 || {
+    echo "[!] mkbootimg v2 failed, trying header v0..."
+    /tmp/mkbootimg/mkbootimg \
+        --kernel "${KERNEL_IMAGE}" \
+        --ramdisk "${MINITRD}" \
+        --base 0x00000000 \
+        --kernel_offset 0x00008000 \
+        --ramdisk_offset 0x01000000 \
+        --tags_offset 0x00000100 \
+        --output "${OUTPUT_DIR}/boot.img" 2>&1
 }
 
 if [ -f "${OUTPUT_DIR}/boot.img" ]; then
-    echo "  -> boot.img created"
+    echo "  -> boot.img ($(du -sh ${OUTPUT_DIR}/boot.img | cut -f1))"
+else
+    echo "[!] boot.img creation failed, uploading kernel images only"
 fi
 
 ls -la "${OUTPUT_DIR}/"
