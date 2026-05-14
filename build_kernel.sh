@@ -61,6 +61,10 @@ cd "${KERNEL_ROOT}"
 echo "[*] Applying KernelSU kernel patches..."
 python3 "${GITHUB_WORKSPACE:-.}/patch_kernel.py" "${KERNEL_DIR}"
 
+echo "[*] Fixing build compatibility issues..."
+# Fix selinux classmap.h PF_MAX check for newer host headers
+sed -i 's/#if PF_MAX > 44/#if PF_MAX > 50/' "${KERNEL_DIR}/security/selinux/include/classmap.h"
+
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}/${KERNEL_DIR}"
 
