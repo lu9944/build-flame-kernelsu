@@ -21,7 +21,7 @@ jobs:
 
     - name: Build Kernel
       run: |
-        chmod +x build_kernel.sh patch_kernel.py
+        chmod +x build_kernel.sh
         bash build_kernel.sh
 
     - name: Upload to Release

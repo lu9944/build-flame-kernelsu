@@ -10,7 +10,7 @@ JOBS=$(nproc)
 echo "============================================"
 echo " KernelSU Kernel Builder for Pixel 4 (flame)"
 echo " Kernel: ${MANIFEST_BRANCH}"
-echo " KernelSU: ${KERNELSU_VERSION}"
+echo " KernelSU: ${KERNELSU_VERSION} (kprobe)"
 echo "============================================"
 
 echo "[*] Installing dependencies..."
@@ -39,76 +39,40 @@ repo init -u ${MANIFEST_URL} -b ${MANIFEST_BRANCH} -g all --depth=1 2>&1 | tail 
 echo "[*] Syncing kernel source (this may take a while)..."
 repo sync -j${JOBS} -c --no-tags --no-clone-bundle 2>&1 | tail -5
 
-# Save the absolute root path of kernel_build
 KERNEL_ROOT=$(pwd)
 echo "[*] Kernel root: ${KERNEL_ROOT}"
 
-CLANG_BIN="${KERNEL_ROOT}/prebuilts-master/clang/host/linux-x86/clang-r353983c/bin"
-GCC_BIN="${KERNEL_ROOT}/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
-GCC32_BIN="${KERNEL_ROOT}/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin"
-CLANG_LIB="${KERNEL_ROOT}/prebuilts-master/clang/host/linux-x86/clang-r353983c/lib64"
+echo "[*] Replacing kernel/build with old version that has build.sh..."
+rm -rf build
+git clone --depth=1 -b android-10.0.0_r12 https://android.googlesource.com/kernel/build build 2>&1 | tail -3
 
 echo "[*] Verifying toolchains..."
-echo "  Clang: $(ls ${CLANG_BIN}/clang 2>/dev/null || echo 'MISSING')"
+CLANG_BIN="${KERNEL_ROOT}/prebuilts-master/clang/host/linux-x86/clang-r353983c/bin"
+echo "  clang: $(ls ${CLANG_BIN}/clang 2>/dev/null || echo 'MISSING')"
 echo "  ld.lld: $(ls ${CLANG_BIN}/ld.lld 2>/dev/null || echo 'MISSING')"
-echo "  GCC ld: $(ls ${GCC_BIN}/aarch64-linux-android-ld 2>/dev/null || echo 'MISSING')"
 
-echo "[*] Setting up KernelSU ${KERNELSU_VERSION}..."
+echo "[*] Setting up KernelSU ${KERNELSU_VERSION} (kprobe method)..."
 cd ${KERNEL_DIR}
 curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s ${KERNELSU_VERSION}
 cd "${KERNEL_ROOT}"
 
-echo "[*] Applying KernelSU kernel patches..."
-python3 "${GITHUB_WORKSPACE:-.}/patch_kernel.py" "${KERNEL_DIR}"
+echo "[*] Enabling KPROBES in defconfig..."
+DEFCONFIG="${KERNEL_DIR}/arch/arm64/configs/floral_defconfig"
+grep -q "CONFIG_KPROBES=y" "${DEFCONFIG}" || echo "CONFIG_KPROBES=y" >> "${DEFCONFIG}"
 
 echo "[*] Fixing build compatibility issues..."
-# Fix selinux classmap.h PF_MAX check for newer host headers
 sed -i 's/#if PF_MAX > 44/#if PF_MAX > 50/' "${KERNEL_DIR}/security/selinux/include/classmap.h"
-# Disable DT overlay build (dtc compatibility issue on newer hosts)
-sed -i 's/CONFIG_BUILD_ARM64_DT_OVERLAY=y/# CONFIG_BUILD_ARM64_DT_OVERLAY is not set/' "${KERNEL_DIR}/arch/arm64/configs/floral_defconfig"
+sed -i 's/CONFIG_BUILD_ARM64_DT_OVERLAY=y/# CONFIG_BUILD_ARM64_DT_OVERLAY is not set/' "${DEFCONFIG}"
 
 echo "[*] Building kernel..."
-cd "${KERNEL_ROOT}/${KERNEL_DIR}"
+cd "${KERNEL_ROOT}"
 
 export ARCH=arm64
-export SUBARCH=arm64
-
-export PATH="${CLANG_BIN}:${GCC_BIN}:${GCC32_BIN}:${PATH}"
-export LD_LIBRARY_PATH="${CLANG_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-echo "[*] Debug: PWD=${PWD}"
-echo "[*] Debug: CLANG_BIN=${CLANG_BIN}"
-ls -la "${CLANG_BIN}/clang" 2>/dev/null || echo "CLANG NOT FOUND at ${CLANG_BIN}"
-ls -la "${CLANG_BIN}/ld.lld" 2>/dev/null || echo "ld.lld NOT FOUND at ${CLANG_BIN}"
-
-echo "[*] Toolchain PATH:"
-echo "  clang: $(which clang 2>/dev/null || echo 'NOT FOUND')"
-echo "  ld.lld: $(which ld.lld 2>/dev/null || echo 'NOT FOUND')"
-echo "  aarch64-linux-android-gcc: $(which aarch64-linux-android-gcc 2>/dev/null || echo 'NOT FOUND')"
-
-echo "[*] Making defconfig..."
-make O=out ARCH=arm64 \
-    HOSTCFLAGS="-fcommon" \
-    CC=clang \
-    LD=ld.lld \
-    CLANG_TRIPLE=aarch64-linux-gnu- \
-    CROSS_COMPILE=aarch64-linux-android- \
-    CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-    floral_defconfig
-
-echo "[*] Building kernel (this may take a while)..."
-make -j${JOBS} O=out \
-    ARCH=arm64 \
-    HOSTCFLAGS="-fcommon" \
-    CC=clang \
-    LD=ld.lld \
-    CLANG_TRIPLE=aarch64-linux-gnu- \
-    CROSS_COMPILE=aarch64-linux-android- \
-    CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-    2>&1 || {
-        echo "[!] Build failed."
-        exit 1
-    }
+export JOBS
+BUILD_CONFIG=${KERNEL_DIR}/build.config.no-cfi build/build.sh 2>&1 || {
+    echo "[!] Build failed."
+    exit 1
+}
 
 echo "[*] Build complete!"
 
@@ -116,17 +80,22 @@ echo "[*] Collecting build outputs..."
 OUTPUT_DIR="${GITHUB_WORKSPACE:-.}/output"
 mkdir -p "${OUTPUT_DIR}"
 
-if [ -f out/arch/arm64/boot/Image.lz4 ]; then
-    cp out/arch/arm64/boot/Image.lz4 "${OUTPUT_DIR}/"
-    echo "  -> Image.lz4"
-fi
+DIST_DIR="${KERNEL_ROOT}/out/dist"
+OUT_DIR="${KERNEL_ROOT}/out"
 
-if [ -f out/arch/arm64/boot/dtbo.img ]; then
-    cp out/arch/arm64/boot/dtbo.img "${OUTPUT_DIR}/"
-    echo "  -> dtbo.img"
-fi
+for f in \
+    "${DIST_DIR}/Image.lz4" \
+    "${DIST_DIR}/dtbo.img" \
+    "${OUT_DIR}/arch/arm64/boot/Image.lz4" \
+    "${OUT_DIR}/arch/arm64/boot/dtbo.img" \
+    ; do
+    if [ -f "$f" ]; then
+        cp "$f" "${OUTPUT_DIR}/"
+        echo "  -> $(basename $f)"
+    fi
+done
 
-for dtb in out/arch/arm64/boot/dts/google/qcom-base/sm8150*.dtb; do
+for dtb in "${OUT_DIR}/arch/arm64/boot/dts/google/qcom-base/"sm8150*.dtb; do
     if [ -f "$dtb" ]; then
         cp "$dtb" "${OUTPUT_DIR}/"
         echo "  -> $(basename $dtb)"
