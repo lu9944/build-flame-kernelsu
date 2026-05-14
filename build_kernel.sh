@@ -103,7 +103,11 @@ make -j${JOBS} O=out \
     CLANG_TRIPLE=aarch64-linux-gnu- \
     CROSS_COMPILE=aarch64-linux-android- \
     CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-    2>&1 | tail -20
+    2>&1 | tee /tmp/kernel_build.log || {
+        echo "[!] Build failed. Showing errors:"
+        grep -E "error:|Error " /tmp/kernel_build.log | grep -v "goto out" | tail -20
+        exit 1
+    }
 
 echo "[*] Build complete!"
 
