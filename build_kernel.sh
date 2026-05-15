@@ -81,18 +81,26 @@ sed -i '/CONFIG_MODVERSIONS/d' "${DEFCONFIG}"
 echo '# CONFIG_MODVERSIONS is not set' >> "${DEFCONFIG}"
 sed -i '/CONFIG_MODULE_SRCVERSION_ALL/d' "${DEFCONFIG}"
 echo '# CONFIG_MODULE_SRCVERSION_ALL is not set' >> "${DEFCONFIG}"
-sed -i 's/POST_DEFCONFIG_CMDS=.*/POST_DEFCONFIG_CMDS=""/' "${KERNEL_DIR}/build.config.no-cfi"
-python3 -c "
-import re
-kconfig = '${KERNEL_DIR}/init/Kconfig'
-with open(kconfig, 'r') as f:
+export BCFILE="${KERNEL_DIR}/build.config.no-cfi"
+python3 << 'PYEOF'
+import os, re
+bc = os.environ.get('BCFILE', '')
+if not bc:
+    print('  BCFILE not set, skipping')
+    exit(0)
+with open(bc, 'r') as f:
     data = f.read()
-data = re.sub(r'(config MODVERSIONS\n(?:\t[^\n]*\n)*\t)default y', r'\1default n', data)
-data = re.sub(r'(config MODULE_SRCVERSION_ALL\n(?:\t[^\n]*\n)*\t)default y', r'\1default n', data)
-with open(kconfig, 'w') as f:
-    f.write(data)
-print('  Kconfig MODVERSIONS default changed to n')
-"
+m = re.search(r'POST_DEFCONFIG_CMDS="([^"]*)"', data)
+if m:
+    cmds = m.group(1)
+    new_cmds = cmds + ' && ${KERNEL_DIR}/scripts/config --file ${OUT_DIR}/.config -d MODVERSIONS && ${KERNEL_DIR}/scripts/config --file ${OUT_DIR}/.config -d MODULE_SRCVERSION_ALL'
+    data = data.replace(m.group(0), 'POST_DEFCONFIG_CMDS="' + new_cmds + '"')
+    with open(bc, 'w') as f:
+        f.write(data)
+    print('  POST_DEFCONFIG_CMDS updated to append MODVERSIONS disable')
+else:
+    print('  POST_DEFCONFIG_CMDS not found in build config')
+PYEOF
 
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}"
