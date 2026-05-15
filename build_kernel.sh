@@ -76,31 +76,7 @@ sed -i '/CONFIG_LOCALVERSION_AUTO/d' "${DEFCONFIG}"
 echo '# CONFIG_LOCALVERSION_AUTO is not set' >> "${DEFCONFIG}"
 export LOCALVERSION=""
 
-echo "[*] Disabling MODVERSIONS to allow stock vendor modules to load..."
-sed -i '/CONFIG_MODVERSIONS/d' "${DEFCONFIG}"
-echo '# CONFIG_MODVERSIONS is not set' >> "${DEFCONFIG}"
-sed -i '/CONFIG_MODULE_SRCVERSION_ALL/d' "${DEFCONFIG}"
-echo '# CONFIG_MODULE_SRCVERSION_ALL is not set' >> "${DEFCONFIG}"
-export BCFILE="${KERNEL_DIR}/build.config.no-cfi"
-python3 << 'PYEOF'
-import os, re
-bc = os.environ.get('BCFILE', '')
-if not bc:
-    print('  BCFILE not set, skipping')
-    exit(0)
-with open(bc, 'r') as f:
-    data = f.read()
-m = re.search(r'POST_DEFCONFIG_CMDS="([^"]*)"', data)
-if m:
-    cmds = m.group(1)
-    new_cmds = cmds + ' && \\${KERNEL_DIR}/scripts/config --file \\${OUT_DIR}/.config -d MODVERSIONS && \\${KERNEL_DIR}/scripts/config --file \\${OUT_DIR}/.config -d MODULE_SRCVERSION_ALL'
-    data = data.replace(m.group(0), 'POST_DEFCONFIG_CMDS="' + new_cmds + '"')
-    with open(bc, 'w') as f:
-        f.write(data)
-    print('  POST_DEFCONFIG_CMDS updated to append MODVERSIONS disable')
-else:
-    print('  POST_DEFCONFIG_CMDS not found in build config')
-PYEOF
+echo "[*] Keeping MODVERSIONS enabled (stock kernel uses it, our modules will replace stock)"
 
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}"
@@ -235,7 +211,57 @@ else
     echo "[!] boot.img creation failed, uploading kernel images only"
 fi
 
-echo "[*] Stock vendor modules will be used (no Magisk module needed since MODVERSIONS is disabled)"
+echo "[*] Collecting kernel modules and creating KernelSU module..."
+MODULES_DIR="${OUTPUT_DIR}/modules"
+mkdir -p "${MODULES_DIR}"
+
+KO_COUNT=0
+KO_LIST=""
+for ko in $(find "${ACTUAL_OUT}" -name "*.ko" -type f 2>/dev/null | sort); do
+    cp "$ko" "${MODULES_DIR}/"
+    KO_LIST="${KO_LIST} $(basename $ko)"
+    KO_COUNT=$((KO_COUNT + 1))
+done
+
+if [ ${KO_COUNT} -gt 0 ]; then
+    KSU_MOD_DIR="${OUTPUT_DIR}/kernelsu-modules"
+    VENDOR_MOD="${KSU_MOD_DIR}/system/vendor/lib/modules"
+    mkdir -p "${VENDOR_MOD}"
+
+    for ko in "${MODULES_DIR}"/*.ko; do
+        cp "$ko" "${VENDOR_MOD}/"
+    done
+
+    cat > "${KSU_MOD_DIR}/module.prop" << 'EOF'
+id=kernelsu_modules
+name=KernelSU Kernel Modules
+version=v1.0
+versionCode=100
+author=KernelSU
+description=Kernel modules matching custom kernel (WiFi, touchscreen, audio, camera)
+EOF
+
+    cat > "${KSU_MOD_DIR}/post-fs-data.sh" << 'SCRIPT'
+MODDIR=${0%/*}
+VENDOR_MODULES=/vendor/lib/modules
+for ko in "$MODDIR/system/vendor/lib/modules/"*.ko; do
+    NAME=$(basename "$ko")
+    cp "$ko" "$VENDOR_MODULES/$NAME" 2>/dev/null
+    chown root:root "$VENDOR_MODULES/$NAME" 2>/dev/null
+    chmod 644 "$VENDOR_MODULES/$NAME" 2>/dev/null
+done
+depmod -b /vendor 2>/dev/null
+SCRIPT
+
+    cd "${KSU_MOD_DIR}"
+    zip -r "${OUTPUT_DIR}/kernelsu-modules.zip" . 2>/dev/null
+    cd "${OUTPUT_DIR}"
+    rm -rf "${KSU_MOD_DIR}" "${MODULES_DIR}"
+    echo "  -> kernelsu-modules.zip (${KO_COUNT} modules)"
+else
+    echo "[!] No kernel modules found"
+    rm -rf "${MODULES_DIR}"
+fi
 
 ls -la "${OUTPUT_DIR}/"
 echo "[*] Done!"
