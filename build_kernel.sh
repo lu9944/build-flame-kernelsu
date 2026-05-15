@@ -76,6 +76,12 @@ sed -i '/CONFIG_LOCALVERSION_AUTO/d' "${DEFCONFIG}"
 echo '# CONFIG_LOCALVERSION_AUTO is not set' >> "${DEFCONFIG}"
 export LOCALVERSION=""
 
+echo "[*] Disabling MODVERSIONS to allow stock vendor modules to load..."
+sed -i '/CONFIG_MODVERSIONS/d' "${DEFCONFIG}"
+echo '# CONFIG_MODVERSIONS is not set' >> "${DEFCONFIG}"
+sed -i '/CONFIG_MODULE_SRCVERSION_ALL/d' "${DEFCONFIG}"
+echo '# CONFIG_MODULE_SRCVERSION_ALL is not set' >> "${DEFCONFIG}"
+
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}"
 
