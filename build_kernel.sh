@@ -81,6 +81,17 @@ sed -i '/CONFIG_MODVERSIONS/d' "${DEFCONFIG}"
 echo '# CONFIG_MODVERSIONS is not set' >> "${DEFCONFIG}"
 sed -i '/CONFIG_MODULE_SRCVERSION_ALL/d' "${DEFCONFIG}"
 echo '# CONFIG_MODULE_SRCVERSION_ALL is not set' >> "${DEFCONFIG}"
+sed -i 's/POST_DEFCONFIG_CMDS=.*//' "${KERNEL_DIR}/build.config.no-cfi"
+echo 'POST_DEFCONFIG_CMDS="kernel_config_disable_modversions"' >> "${KERNEL_DIR}/build.config.no-cfi"
+cat >> "${KERNEL_DIR}/build.config.no-cfi" << 'BCFG'
+
+kernel_config_disable_modversions() {
+    ${KERNEL_DIR}/scripts/config --file ${OUT_DIR}/.config -d MODVERSIONS
+    ${KERNEL_DIR}/scripts/config --file ${OUT_DIR}/.config -d MODULE_SRCVERSION_ALL
+    ${KERNEL_DIR}/scripts/config --file ${OUT_DIR}/.config -d LOCALVERSION_AUTO
+    cd ${KERNEL_DIR} && make O=${OUT_DIR} olddefconfig
+}
+BCFG
 
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}"
