@@ -196,5 +196,29 @@ else
     echo "[!] boot.img creation failed, uploading kernel images only"
 fi
 
+echo "[*] Collecting kernel modules..."
+MODULES_DIR="${OUTPUT_DIR}/modules"
+mkdir -p "${MODULES_DIR}"
+
+KO_COUNT=0
+for ko in $(find "${ACTUAL_OUT}" -name "*.ko" -type f 2>/dev/null); do
+    cp "$ko" "${MODULES_DIR}/"
+    KO_COUNT=$((KO_COUNT + 1))
+done
+
+if [ ${KO_COUNT} -gt 0 ]; then
+    echo "[*] Creating modules.zip (${KO_COUNT} modules)..."
+    cd "${MODULES_DIR}"
+    ls *.ko | sed 's/\.ko$//' > modules.load
+    depmod -b . *.ko 2>/dev/null || true
+    cd "${OUTPUT_DIR}"
+    zip -j modules.zip modules/*.ko modules/modules.load 2>/dev/null
+    rm -rf "${MODULES_DIR}"
+    echo "  -> modules.zip ($(du -sh ${OUTPUT_DIR}/modules.zip | cut -f1), ${KO_COUNT} modules)"
+else
+    echo "[!] No kernel modules found"
+    rm -rf "${MODULES_DIR}"
+fi
+
 ls -la "${OUTPUT_DIR}/"
 echo "[*] Done!"
