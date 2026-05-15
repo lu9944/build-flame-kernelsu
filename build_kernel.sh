@@ -93,7 +93,7 @@ with open(bc, 'r') as f:
 m = re.search(r'POST_DEFCONFIG_CMDS="([^"]*)"', data)
 if m:
     cmds = m.group(1)
-    new_cmds = cmds + ' && ${KERNEL_DIR}/scripts/config --file ${OUT_DIR}/.config -d MODVERSIONS && ${KERNEL_DIR}/scripts/config --file ${OUT_DIR}/.config -d MODULE_SRCVERSION_ALL'
+    new_cmds = cmds + ' && \\${KERNEL_DIR}/scripts/config --file \\${OUT_DIR}/.config -d MODVERSIONS && \\${KERNEL_DIR}/scripts/config --file \\${OUT_DIR}/.config -d MODULE_SRCVERSION_ALL'
     data = data.replace(m.group(0), 'POST_DEFCONFIG_CMDS="' + new_cmds + '"')
     with open(bc, 'w') as f:
         f.write(data)
