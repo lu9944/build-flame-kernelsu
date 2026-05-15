@@ -235,57 +235,7 @@ else
     echo "[!] boot.img creation failed, uploading kernel images only"
 fi
 
-echo "[*] Collecting kernel modules..."
-MODULES_DIR="${OUTPUT_DIR}/modules"
-mkdir -p "${MODULES_DIR}"
-
-KO_COUNT=0
-for ko in $(find "${ACTUAL_OUT}" -name "*.ko" -type f 2>/dev/null); do
-    cp "$ko" "${MODULES_DIR}/"
-    KO_COUNT=$((KO_COUNT + 1))
-done
-
-if [ ${KO_COUNT} -gt 0 ]; then
-    echo "[*] Creating Magisk module for kernel modules (${KO_COUNT} modules)..."
-
-    MAGISK_DIR="${OUTPUT_DIR}/kernelsu-modules-magisk"
-    VENDOR_MODULES="${MAGISK_DIR}/system/vendor/lib/modules"
-    mkdir -p "${VENDOR_MODULES}"
-
-    for ko in "${MODULES_DIR}"/*.ko; do
-        cp "$ko" "${VENDOR_MODULES}/"
-    done
-
-    cat > "${MAGISK_DIR}/module.prop" << 'EOF'
-id=kernelsu_modules
-name=KernelSU Custom Kernel Modules
-version=v1.0
-versionCode=100
-author=KernelSU
-description=Kernel modules for custom kernel (WiFi, touchscreen, audio, camera)
-EOF
-
-    cat > "${MAGISK_DIR}/post-fs-data.sh" << 'SCRIPT'
-MODDIR=${0%/*}
-VENDOR_MODULES=/vendor/lib/modules
-for ko in "$MODDIR/system/vendor/lib/modules/"*.ko; do
-    NAME=$(basename "$ko")
-    cp "$ko" "$VENDOR_MODULES/$NAME" 2>/dev/null
-    chown root:root "$VENDOR_MODULES/$NAME" 2>/dev/null
-    chmod 644 "$VENDOR_MODULES/$NAME" 2>/dev/null
-done
-depmod -b /vendor 2>/dev/null
-SCRIPT
-
-    cd "${MAGISK_DIR}"
-    zip -r "${OUTPUT_DIR}/kernelsu-modules-magisk.zip" . 2>/dev/null
-    cd "${OUTPUT_DIR}"
-    rm -rf "${MAGISK_DIR}" "${MODULES_DIR}"
-    echo "  -> kernelsu-modules-magisk.zip (${KO_COUNT} modules)"
-else
-    echo "[!] No kernel modules found"
-    rm -rf "${MODULES_DIR}"
-fi
+echo "[*] Stock vendor modules will be used (no Magisk module needed since MODVERSIONS is disabled)"
 
 ls -la "${OUTPUT_DIR}/"
 echo "[*] Done!"
