@@ -82,8 +82,17 @@ echo '# CONFIG_MODVERSIONS is not set' >> "${DEFCONFIG}"
 sed -i '/CONFIG_MODULE_SRCVERSION_ALL/d' "${DEFCONFIG}"
 echo '# CONFIG_MODULE_SRCVERSION_ALL is not set' >> "${DEFCONFIG}"
 sed -i 's/POST_DEFCONFIG_CMDS=.*/POST_DEFCONFIG_CMDS=""/' "${KERNEL_DIR}/build.config.no-cfi"
-sed -i '/^config MODVERSIONS$/,/^config\|^$/{s/default y/default n/}' "${KERNEL_DIR}/init/Kconfig" 2>/dev/null || true
-sed -i '/^config MODULE_SRCVERSION_ALL$/,/^config\|^$/{s/default y/default n/}' "${KERNEL_DIR}/init/Kconfig" 2>/dev/null || true
+python3 -c "
+import re
+kconfig = '${KERNEL_DIR}/init/Kconfig'
+with open(kconfig, 'r') as f:
+    data = f.read()
+data = re.sub(r'(config MODVERSIONS\n(?:\t[^\n]*\n)*\t)default y', r'\1default n', data)
+data = re.sub(r'(config MODULE_SRCVERSION_ALL\n(?:\t[^\n]*\n)*\t)default y', r'\1default n', data)
+with open(kconfig, 'w') as f:
+    f.write(data)
+print('  Kconfig MODVERSIONS default changed to n')
+"
 
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}"
