@@ -69,10 +69,12 @@ sed -i 's/check_defconfig && //' "${KERNEL_DIR}/build.config.no-cfi"
 
 echo "[*] Fixing kernel version to match stock 4.14.150-gf3a84757f21f-ab6216664..."
 sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 150/' "${KERNEL_DIR}/Makefile"
-find "${KERNEL_ROOT}" -maxdepth 3 -name "localversion*" -type f -exec echo "  Removing: {}" \; -delete
+find "${KERNEL_ROOT}" \( -name "localversion*" -o -name "localversion" \) -type f -exec echo "  Removing: {}" \; -delete 2>/dev/null
 sed -i '/CONFIG_LOCALVERSION/d' "${DEFCONFIG}"
 echo 'CONFIG_LOCALVERSION="-gf3a84757f21f-ab6216664"' >> "${DEFCONFIG}"
-sed -i 's/CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' "${DEFCONFIG}"
+sed -i '/CONFIG_LOCALVERSION_AUTO/d' "${DEFCONFIG}"
+echo '# CONFIG_LOCALVERSION_AUTO is not set' >> "${DEFCONFIG}"
+export LOCALVERSION=""
 
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}"
