@@ -67,6 +67,13 @@ sed -i 's/CONFIG_BUILD_ARM64_DT_OVERLAY=y/# CONFIG_BUILD_ARM64_DT_OVERLAY is not
 # Remove check_defconfig to avoid savedefconfig mismatch
 sed -i 's/check_defconfig && //' "${KERNEL_DIR}/build.config.no-cfi"
 
+echo "[*] Fixing kernel version to match stock 4.14.150-gf3a84757f21f..."
+sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 150/' "${KERNEL_DIR}/Makefile"
+find "${KERNEL_ROOT}" -maxdepth 3 -name "localversion*" -type f -exec echo "  Removing: {}" \; -delete
+sed -i '/CONFIG_LOCALVERSION/d' "${DEFCONFIG}"
+echo 'CONFIG_LOCALVERSION="-gf3a84757f21f"' >> "${DEFCONFIG}"
+sed -i 's/CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' "${DEFCONFIG}"
+
 echo "[*] Building kernel..."
 cd "${KERNEL_ROOT}"
 
@@ -78,6 +85,10 @@ BUILD_CONFIG=${KERNEL_DIR}/build.config.no-cfi build/build.sh 2>&1 || {
 }
 
 echo "[*] Build complete!"
+
+echo "[*] Kernel version:"
+cat "${KERNEL_ROOT}/out/android-msm-floral-4.14/private/msm-google/include/generated/utsrelease.h" 2>/dev/null || \
+    grep -r "UTS_RELEASE" "${KERNEL_ROOT}/out" --include="utsrelease.h" 2>/dev/null | head -1
 
 echo "[*] Collecting build outputs..."
 OUTPUT_DIR="${GITHUB_WORKSPACE:-.}/output"
